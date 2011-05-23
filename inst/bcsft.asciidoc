@@ -1,0 +1,421 @@
+= Adding BcSfT Crosses to R qtl =
+=======================
+Brian S Yandell <byandell@wisc.edu>
+2 May 2011
+:toc:
+:numbered:
+:data-uri:
+
+
+
+== Introduction ==
+
+This document describes some of the steps and tests Laura Shannon <lshannon@wisc.edu>
+and I employed to add BCsFt experimental crosses to R/qtl.
+The home page for R/qtl is http://www.rqtl.org
+
+A BCsFt cross has one F1 generatin, s generations of backcross to one parent, and t generations of intercross.
+Thus, BC1F0 is a backcross and BC0F2 is an intercross. Note convention that if s = 0, then t is one more than
+the number of intercross generations. The cross type is "bcsft", and there is an additional attribute,
+"scheme", which has value c(s,t).
+
+.Here are some open code issues:
+* Code discussion for Karl:
+* general
+** 1. Efficiency improvement: Reverse for loops to change rf less often (hmm_main.c).
+** 2. Check on X chr--are we OK?
+** 3. We have done BCsFtself. BCsFtsib is a lot more work! (but can be done)
+* est.rf
+** 4. Check LOD missing value handling for est.rf: est_rf_bc gives missing values but est_rf does not.
+** 5. Why does est.rf use meioses_per for autosomes when doing A*X rf?
+** 6. est.rf for F2: logprec_f2 appears to be wrong: should not be symmetric.
+** 7. est.rf with bcsft maxes at 0.5, while it can be larger for f2 or bc.
+* argmax.geno
+** 8. argmax.geno handling of all missing for chr? (RNG issue)
+* sim.cross
+** 9. sim.cross.bcsft seems to be working, but see est.map below
+* est.map
+** 10. est.map seemed OK on hyper and fake.f2, but blew up on sim.cross of F2 data.
+    especial problem with X chr, but some issues with autosomes as well.
+* advanced intercrosses
+** 11. Maps are many times too large. Not sure where the problem lies.
+
+== Known Experimental Crosses ==
+
+=== Hyper Backcross ===
+
+<<options,echo=FALSE,results=hide>>=
+setCacheDir("Rcache")
+options(width=132, digits=3, scipen=4)
+set.seed(62896949)
+@ 
+
+<<junk,echo=FALSE>>=    Somehow, this avoids the "figure margins too large" error
+par(mar=rep(0,4))
+@
+
+Use hyper data from R/qtl. The object hyper.bcsft
+<<hyper>>=
+library(qtlbcsft)
+## Real BC.
+data(hyper)
+## Make sure BC code works.
+hyper <- jittermap(hyper)
+
+## Create phony bcsft
+hyper.bcsft <- hyper
+class(hyper.bcsft)[1] <- "bcsft"
+attr(hyper.bcsft, "scheme") <- c(1,0)
+@
+
+Now check calculation of genotype probability.
+<<hypercalc>>=
+## Check calc.genoprob                                                                                                                  
+hyper <- calc.genoprob(hyper,step=2)
+hyper.bcsft <- calc.genoprob(hyper.bcsft,step=2)
+## Below is problem when not using jittermap.                                                                                           
+hyper$geno[[1]]$prob[1:5,1:5,]
+hyper.bcsft$geno[[1]]$prob[1:5,1:5,]
+
+for(i in names(hyper$geno)) {
+  tmp <- hyper$geno[[i]]$prob - hyper.bcsft$geno[[i]]$prob
+  print(range(c(tmp), na.rm = TRUE))
+}
+@
+
+Check linkage maps.
+<<lots_of_figs,fig=TRUE,height=4>>=
+## Check linkage map estimates.                                                                                                         
+map <- est.map(hyper)
+map1 <- est.map(hyper.bcsft)
+plot.map(map,map1)
+for(i in names(map)) {
+  tmp <- map[[i]] - map1[[i]]
+  print(range(c(tmp), na.rm = TRUE))
+}
+
+## Check log likelihood calculated.
+sapply(map, function(x) attr(x, "loglik"))
+sapply(map1, function(x) attr(x, "loglik"))
+sapply(map, function(x) attr(x, "loglik")) - sapply(map1, function(x) attr(x, "loglik"))
+@
+
+Recombination frequencies.
+
+<<hyperrf,fig=TRUE,height=5>>=
+## BC est.rf.                                                                                                                                                                  
+rf <- est.rf(hyper)
+rf1 <- est.rf(hyper.bcsft)
+cmp.rf(rf,rf1)
+plot.rf(rf)
+@
+
+<<hyperrfb,fig=TRUE,height=5>>=
+plot.rf(rf1)
+@
+
+=== Fake.f2 Intercross ===
+
+<<fakef2>>=
+## Fake F2.                                                                                                                                                                    
+data(fake.f2)
+## Add some missing values to genotypes.                                                                                                                                       
+fake.f2$geno[[1]]$data[runif(length(fake.f2$geno[[1]]$data)) < .1] <- NA
+fake.bcsft <- fake.f2
+attr(fake.bcsft, "scheme") <- c(0,2)
+## F2 calc.genoprob.                                                                                                                                                           
+fake.f2 <- calc.genoprob(fake.f2, step = 2)
+fake.bcsft <- calc.genoprob(fake.bcsft, step = 2)
+for(i in names(fake.f2$geno)) {
+  tmp <- fake.f2$geno[[i]]$prob - fake.bcsft$geno[[i]]$prob
+  print(range(c(tmp), na.rm = TRUE))
+}
+@
+
+Estimate maps.
+
+<<fakemap,fig=TRUE,height=4>>=
+## F2 est.map                                                                                                                                                                  
+map2 <- est.map(fake.f2)
+map3 <- est.map(fake.bcsft)
+plot(map2,map3)
+@
+
+Estimate recombination frequencies.
+
+<<fakerf>>=
+## F2 est.rf                                                                                                                                                                   
+rf2 <- est.rf(fake.f2)
+rf3 <- est.rf(fake.bcsft)
+cmp.rf(rf2,rf3)
+@
+
+=== Simulated Data ===
+
+==== Simulate F2 ====
+
+Simulate F2 using BC0F2 code. Check maps.
+
+<<simf2,fig=TRUE,height=5>>=
+map <- sim.map(rep(100,2), n.mar = 10)
+
+## Simulate F2
+out.bc0f2 <- sim.cross(map, type="bcsft", cross.scheme = c(0,2))
+out.f2 <- out.bc0f2
+class(out.f2)[1] <- "bcsft"
+attr(out.f2, "scheme") <- c(0,2)
+map.bc0f2 <- est.map(out.bc0f2)
+map.f2 <- est.map(out.f2)
+for(i in seq(length(map.bc0f2))) {
+  print(i)
+  print(map.bc0f2[[i]] - map.f2[[i]])
+  print(attr(map.bc0f2[[i]], "loglik") - attr(map.f2[[i]], "loglik"))
+}
+plot(map.bc0f2,map.f2)
+@
+
+==== Simulate BC ====
+     
+<<simbc,fig=TRUE,height=5>>=
+map <- sim.map(100, n.mar = 2)
+out.bc1f0 <- sim.cross(map, type="bcsft",cross.scheme = c(1,0))
+out.bc <- out.bc1f0                                                                                    
+class(out)[1] <- "bc"
+
+map0 <- est.map(out.bc)
+map1 <- est.map(out.bc1f0)
+plot(map0,map1)
+rf.bc1f0 <- est.rf(out.bc1f0)
+rf.bc <- est.rf(out.bc)
+rf.bc$rf
+rf.bc1f0$rf
+#cmp.rf(rf1,rf.bc)
+geno1 <- pull.geno(out.bc1f0)
+table(geno1[,1],geno1[,2])
+geno.bc <- pull.geno(out.bc)
+table(geno.bc[,1],geno.bc[,2])
+@
+
+== Estimating Recombination Rates ==
+
+R/qtl uses a simple formula for the recombination rate in est.map. Basically it is the number of recombinations over the number of meioses. This works for BC, F2 and the RI experimental crosses, but does not work for advanced crosses of the form BCsFt.
+
+=== Recombination Rates using Number of Recombinations ===
+<<optionsd,echo=FALSE,results=hide>>=
+par(mfrow = c(2,2))
+@
+
+<<rfrec,fig=TRUE,height=8>>=
+## BCs
+rfrec.plot(1,0)
+title("BCs")
+rfrec.plot(2,0,add=T,col="blue")
+rfrec.plot(3,0,add=T,col="blue")
+rfrec.plot(4,0,add=T,col="blue")
+rfrec.plot(5,0,add=T,col="blue")
+rfrec.plot(6,0,add=T,col="blue")
+## Ft
+rfrec.plot(0,2)
+title("Ft")
+rfrec.plot(0,3,add=T,col="red")
+rfrec.plot(0,4,add=T,col="red")
+rfrec.plot(0,5,add=T,col="red")
+rfrec.plot(0,6,add=T,col="red")
+rfrec.plot(0,7,add=T,col="red")
+## BCsFt
+rfrec.plot(1,0)
+title("BCsFt")
+rfrec.plot(1,1,add=T,col="green")
+rfrec.plot(1,2,add=T,col="green")
+rfrec.plot(2,1,add=T,col="green")
+rfrec.plot(2,2,add=T,col="green")
+rfrec.plot(1,3,add=T,col="green")
+rfrec.plot(3,1,add=T,col="green")
+## 3 generations of meioses
+rfrec.plot(0,4,col="red")
+title("BCsFt, 3 generations\n(3,0)=blue; (0,4)=red; (1,2)+(2,1)=green")
+rfrec.plot(3,0,add=T,col="blue")
+rfrec.plot(1,2,add=T,col="green")
+rfrec.plot(2,1,add=T,col="green")
+@
+
+<<optionse,echo=FALSE,results=hide>>=
+par(mfrow = c(1,1))
+@
+
+=== Recombination Rates using Golden Section Search ===
+Now look at the likelihood for F2
+
+<<likeplot,fig=TRUE,height=5>>=
+geno <- pull.geno(out.f2)
+ct <- as.matrix(table(geno[,1],geno[,6]))
+ct
+
+out <- golden(ct,,c(0,2))
+like.plot(out)
+title("golden section search for F2 recomb rate (red = naive)")
+@
+
+Here is a BC2. Golden section search leads to the maximum likelihood rate estimator, but naive estimate does not. Look for instance at recombination between markers 1 and 3.
+
+<<bc2,fig=TRUE,height=5>>=
+map <- sim.map(rep(100,2), n.mar = 10)
+out2 <- sim.cross(map, type="bcsft",cross.scheme = c(2,0), n.ind = 300)
+
+## Look for instance at recombination between markers 1 and 3.
+rf2 <- est.rf(out2)
+rf2$rf[3,1]
+
+geno <- pull.geno(out2)
+ct <- as.matrix(table(geno[,1],geno[,3]))
+ct
+
+out <- golden(ct,,c(2,0))
+like.plot(out)
+naive.rf <- bcsft.rfrecs(2,0,ct)
+naive.rf
+abline(v=naive.rf, col = "blue")
+title("golden section search for recomb rate (blue = naive)")
+@
+
+=== Simulate BC2, BC3 ===
+
+Simulated BC2 and BC3 appear to work with golden section search.
+
+<<simbc2,fig=TRUE,height=5>>=
+map <- sim.map(40, n.mar = 2)
+out.bc2f0 <- sim.cross(map, type="bcsft",cross.scheme = c(2,0))
+rf.bc2f0 <- est.rf(out.bc2f0)
+rf.bc2f0$rf
+geno2 <- pull.geno(out.bc2f0)
+table(geno2[,1],geno2[,2])
+
+out.bc3f0 <- sim.cross(map, type="bcsft",cross.scheme = c(3,0))
+rf.bc3f0 <- est.rf(out.bc3f0)
+rf.bc3f0$rf
+geno3 <- pull.geno(out.bc3f0)
+table(geno3[,1],geno3[,2])
+@
+
+=== Simulate BC2F3 ===
+
+Simulated BC2F3 estimated using golden section and by faking as F2
+
+<<simbc2f3,fig=TRUE,height=5>>=
+map <- sim.map(rep(100,3), n.mar = 30)
+out.bc2f3 <- sim.cross(map, type="bcsft",cross.scheme = c(2,3))
+map.bc2f3 <- est.map(out.bc2f3)
+out.f2 <- out.bc2f3
+class(out.f2)[1] <- "f2"
+map.f2 <- est.map(out.f2)
+plot(map.bc2f3,map.f2)
+title(main="\n\nBC2F3 vs. F2")
+@
+
+== Utilities and Black Box Testing ==
+
+These are various routines to test the new bcsft C code. Some show the results of C code, and some use R to work out the computations.
+
+=== Low Level C Routines ===
+
+init: probability of genotypes at locus
+
+<<lowlevelinit>>=
+bcsft.init(s=1,t=0) ## BC1
+bcsft.init(s=0,t=2) ## F2
+@
+
+step: conditional probability of gen2 given gen1
+
+<<lowlevelstep>>=
+bcsft.step(rf=.5,type="bc")
+bcsft.step(rf=.5,type="f2")
+bcsft.step(rf=.5,s=2,t=0) ## BC2
+@
+
+nrec: expected count with known geno and phase
+ 
+<<lowlevelnrec>>=
+bcsft.nrec(rf=0,s=0,t=2)
+bcsft.nrec(rf=0.5,s=1,t=0)
+@
+
+nrec2: expected count with partially informative genos
+
+prec: joint probability of partially informative geno pair
+
+<<lowlevelnrec>>=
+bcsft.rf(rf=0.5,s=1,t=0)
+@
+
+=== Matrix Approach and Code Development in R ===
+
+Matrix calcs for probabilities and expected counts.
+
+<<matrix>>=
+library(lattice)
+
+rf <- 0.5
+gen <- 10
+## Matrix calcs for probabilities and expected counts.
+## matrix.R: genprobs,sumcts.
+
+pr <- genprobs(rf, gen)
+cts <- sumcts(rf, gen)
+round(cts[,c(1:3,5:6)], 5)
+round(pr[,c(1:3,5:6)], 5)
+apply(pr[,c(1:3,5:6)],1,function(x) sum(x * c(2,4,2,1,1)))
+@
+
+Routines directly translate C to R. Building blocks for probs() and counts() are used in hmm_bcsft.c in R/qtl.
+
+<<counts>>=
+## qtltest.R: counts,probs,expects.
+## Routines directly translate C to R; used in hmm_bcsft.c in R/qtl.
+round(probs(rf, gen), 5)
+round(pr[,c(1:3,5:6)], 5)
+round(cts[,c(1:3,5:6)], 5)
+round(counts(rf, gen), 5)[,1:5]
+
+round(counts(rf, bc.gen = 0, gen), 5)
+@
+
+Check numerator of expected counts.
+
+<<count3>>=
+## Check numerator of expected counts.
+## count3.R: calccounts,calcprobs,countit
+round(calccounts(rf, gen), 5)
+round(sumcts(rf, gen, numerator=T)[,c(1:3,5:6)], 5)
+
+round(calcprobs(rf,gen),5)
+
+## count3.R: countit calls countraw,calccook.
+countit(rf, 3)
+## count3.R: ftcount calls calctrans,calcprobs,calccounts
+sapply(ftcount(rf,gen), round, 5)
+@
+
+<<fast>>=
+## Fast calculation in R.
+ftcount(rf,gen)
+## cast.R: cast,ftcast: efficient calculations.
+cast(rf, gen)
+## fast.R: ftfast to check efficient calculations.
+ftfast(rf, gen)
+@
+
+Various plots over generations.
+
+<<optionsb,echo=FALSE,results=hide>>=
+par(mfrow = c(1,2))
+@
+
+<<plotgen,fig=TRUE,height=5>>=
+plotgen(rf = rf, gen = gen)
+plotct(rf = rf, gen = gen)
+@
+
+<<optionsc,echo=FALSE,results=hide>>=
+par(mfrow = c(1,2))
+@
