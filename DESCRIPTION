@@ -1,0 +1,11 @@
+Package: qtlbcsft
+Version: 0.1.2
+Date: 9 May 2011
+Title: Tools for testing QTL BCsFt calculations
+Author: Brian S. Yandell <byandell@wisc.edu> with Laura Shannon <lshannon@wisc.edu>
+Maintainer: Brian S. Yandell <byandell@wisc.edu>
+Description: Test matrix and more efficient algorithms for BCsFt calculations used in R/qtl.
+Depends: R (>= 2.4.0)
+Depends: qtl,lattice
+License: GPL-3
+Packaged: 2011-05-09 15:17:31 UTC; yandell
